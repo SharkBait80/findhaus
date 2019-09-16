@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+    findhaus
+    
+    A serverless application for a real estate property website.
+
+##################################################################
+#
+#  Globals
+#
+##################################################################
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+    Function:
+        Runtime: dotnetcore2.1
+        Timeout: 10
+        MemorySize: 1024
+
+Resources:
+
+##################################################################
+#
+#  IAM Roles
+#
+##################################################################
+  HouseServiceLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies: 
+        -
+          PolicyName: "FindHausServicePolicy"
+          PolicyDocument: 
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - ssm:GetParameter
+                  - ssm:GetParameterHistory
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/FindHaus/HouseService/*'
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - xray:GetSamplingStatisticSummaries
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                  - lambda:InvokeAsync
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ce:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:GetQueueUrl
+                  - sqs:GetQueueAttributes
+                Resource:
+                  - !Ref NotificationSNSTopic
+
+##################################################################
+#
+#  Lambda Functions
+#
+##################################################################
+
+  houseServiceFunction:
+      Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+      Properties:
+            CodeUri: ./artifacts/HouseService.zip
+            Handler: HouseService::HouseService.Function::FunctionHandler
+            Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
+                Variables:
+                    TestMode: true
+            Tracing: Active  # https://docs.aws.amazon.com/lambda/latest/dg/lambda-x-ray.html
+            Events:
+                CatchAll:
+                    Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+                    Properties:
+                        Path: /{proxy+}
+                        Method: any 
+
+##################################################################
+#
+#  SNS Topics
+#
+##################################################################
+
+  NotificationSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: 'FindHausNotifications'
+
+  NotificationSNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id: HausTopicPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowPublishPolicy
+          Effect: Allow
+          Principal:
+            AWS: !GetAtt HouseServiceLambdaRole.Arn
+          Action: sns:Publish
+          Resource: "*"
+      Topics:
+      - !Ref NotificationSNSTopic
+
+##################################################################
+#
+#  SSM Parameter Store parameters
+#
+##################################################################
+  HouseServiceConnStringSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: '/FindHaus/HouseService/ConnString'
+      Description: 'The connection string to the House Service data store.'
+      Type: String
+      Value: 'Host=myserver;Username=mylogin;Password=mypass;Database=mydatabase'
+
+  HouseServiceSNSTopicSSMParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: '/FindHaus/HouseService/SnsTopic'
+      Description: 'The SNS topic to send notifications to.'
+      Type: String
+      Value: !Ref NotificationSNSTopic
+
+
+
+Outputs:
+
+    houseServiceURL:
+      Description: "API Gateway endpoint URL for Prod environment for findhaus Function"
+      Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/proxy"
+
+    houseServiceFunctionArn:
+      Description: "House Service Lambda Function ARN"
+      Value: !GetAtt houseServiceFunction.Arn
+
+    houseServiceFunctionIamRole:
+      Description: "Implicit IAM Role created for House Service"
+      Value: !GetAtt houseServiceFunctionRole.Arn
